@@ -1,0 +1,9 @@
+schema_version = "1.0.0"
+id = "bb_uv_transfer"
+version = "2.1.1"
+name = "BB UV Transfer"
+tagline = "Bake a high-res mesh's texture onto a different-topology low-res mesh"
+maintainer = "Blender Bob"
+type = "add-on"
+blender_version_min = "4.5.0"
+license = ["SPDX:GPL-3.0-or-later"]
