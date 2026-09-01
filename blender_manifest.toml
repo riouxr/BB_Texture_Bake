@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "bb_uv_transfer"
-version = "2.1.1"
+version = "2.2.0"
 name = "BB UV Transfer"
 tagline = "Bake a high-res mesh's texture onto a different-topology low-res mesh"
 maintainer = "Blender Bob"

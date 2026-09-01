@@ -1,7 +1,7 @@
 bl_info = {
     "name": "BB UV Transfer",
     "author": "Blender Bob",
-    "version": (2, 1, 1),
+    "version": (2, 2, 0),
     "blender": (4, 5, 0),
     "location": "3D View > Sidebar > Tool",
     "description": "Bake a high-resolution mesh's texture onto a different-topology low-resolution mesh",
@@ -114,16 +114,43 @@ class BBUT_OT_bake(bpy.types.Operator):
             bpy.ops.object.mode_set(mode='OBJECT')
 
         if created_uv:
-            dst_uv = dst_mesh.uv_layers.new(name=uv_name)
             for ob in context.view_layer.objects:
                 ob.select_set(False)
             target.select_set(True)
             context.view_layer.objects.active = target
-            dst_mesh.uv_layers.active = dst_uv
-            bpy.ops.object.mode_set(mode='EDIT')
+
+            if len(dst_mesh.uv_layers) == 0:
+                # Entering Edit mode on a mesh with zero UV layers auto-creates one
+                # named "UVMap" already, so nothing needs to be added by hand.
+                bpy.ops.object.mode_set(mode='EDIT')
+            else:
+                # The mesh has other UV layers already; add the named one ourselves.
+                # Setting it active while still in Object mode doesn't reliably carry
+                # over into Edit mode, so it's re-asserted again right after switching.
+                dst_uv = dst_mesh.uv_layers.new(name=uv_name)
+                dst_mesh.uv_layers.active = dst_uv
+                bpy.ops.object.mode_set(mode='EDIT')
+                dst_mesh.uv_layers.active = dst_uv
+
             bpy.ops.mesh.select_all(action='SELECT')
-            bpy.ops.uv.smart_project()
+            # A lower angle limit than the default trades more (smaller, less
+            # distorted) islands for much tighter packing; followed by an explicit
+            # pack pass with rotation and exact-shape packing, since Smart UV
+            # Project's own packing leaves a lot of the UV square empty otherwise.
+            bpy.ops.uv.smart_project(
+                angle_limit=0.87266,  # 50 degrees
+                island_margin=0.01,
+                correct_aspect=True,
+            )
+            bpy.ops.uv.pack_islands(
+                rotate=True,
+                rotate_method='ANY',
+                scale=True,
+                margin=0.001,
+                shape_method='CONCAVE',
+            )
             bpy.ops.object.mode_set(mode='OBJECT')
+            dst_uv = dst_mesh.uv_layers.get(uv_name)
 
         dst_mesh.uv_layers.active = dst_uv
 
