@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "bb_texture_bake"
-version = "3.0.1"
+version = "3.1.0"
 name = "BB Texture Bake"
 tagline = "Bake a high-res mesh's Base Color/Roughness/Normal onto a different-topology low-res mesh"
 maintainer = "Blender Bob"

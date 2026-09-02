@@ -1,7 +1,7 @@
 bl_info = {
     "name": "BB Texture Bake",
     "author": "Blender Bob",
-    "version": (3, 0, 1),
+    "version": (3, 1, 0),
     "blender": (4, 5, 0),
     "location": "3D View > Sidebar > Tool",
     "description": "Bake a high-resolution mesh's Base Color/Roughness/Normal onto a different-topology low-resolution mesh",
@@ -24,6 +24,12 @@ class BBTB_Settings(bpy.types.PropertyGroup):
         description="Mesh to bake the texture onto",
         type=bpy.types.Object,
         poll=lambda self, obj: obj.type == 'MESH',
+    )
+    name_from_target: bpy.props.BoolProperty(
+        name="Name From Target",
+        default=True,
+        description="Use the Low Res object's name as the base image name "
+                     "(e.g. Retopo_D, Retopo_N). Uncheck to set a custom name below",
     )
     image_name: bpy.props.StringProperty(
         name="Image Name",
@@ -176,7 +182,7 @@ class BBTB_OT_bake(bpy.types.Operator):
 
         dst_mesh.uv_layers.active = dst_uv
 
-        image_name = s.image_name.strip() or "BakedTexture"
+        image_name = target.name if s.name_from_target else (s.image_name.strip() or "BakedTexture")
 
         mat = target.active_material
         if mat is None or mat == source.active_material:
@@ -320,7 +326,9 @@ class BBTB_PT_panel(bpy.types.Panel):
 
         box = layout.box()
         box.label(text="Bake Settings")
-        box.prop(s, "image_name")
+        box.prop(s, "name_from_target")
+        if not s.name_from_target:
+            box.prop(s, "image_name")
         box.prop(s, "image_size")
         box.prop(s, "margin")
         box.prop(s, "max_ray_distance")
