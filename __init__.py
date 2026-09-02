@@ -1,7 +1,7 @@
 bl_info = {
     "name": "BB Texture Bake",
     "author": "Blender Bob",
-    "version": (3, 1, 1),
+    "version": (3, 2, 0),
     "blender": (4, 5, 0),
     "location": "3D View > Sidebar > Tool",
     "description": "Bake a high-resolution mesh's Base Color/Roughness/Normal onto a different-topology low-resolution mesh",
@@ -210,6 +210,11 @@ class BBTB_OT_bake(bpy.types.Operator):
                 output_node = mat.node_tree.nodes.new("ShaderNodeOutputMaterial")
                 output_node.location = (250, 300)
             mat.node_tree.links.new(target_bsdf.outputs["BSDF"], output_node.inputs["Surface"])
+
+        if not any(ch[1] == "Roughness" for ch in channels):
+            # No roughness texture on the source to bake -- default to fully
+            # rough rather than leaving Blender's shinier 0.5 default.
+            target_bsdf.inputs["Roughness"].default_value = 1.0
 
         prev_engine = context.scene.render.engine
         context.scene.render.engine = 'CYCLES'
