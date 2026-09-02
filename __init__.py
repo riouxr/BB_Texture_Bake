@@ -1,7 +1,7 @@
 bl_info = {
     "name": "BB Texture Bake",
     "author": "Blender Bob",
-    "version": (3, 0, 0),
+    "version": (3, 0, 1),
     "blender": (4, 5, 0),
     "location": "3D View > Sidebar > Tool",
     "description": "Bake a high-resolution mesh's Base Color/Roughness/Normal onto a different-topology low-resolution mesh",
@@ -193,6 +193,17 @@ class BBTB_OT_bake(bpy.types.Operator):
             mat.use_nodes = True
 
         target_bsdf = next((n for n in mat.node_tree.nodes if n.bl_idname == 'ShaderNodeBsdfPrincipled'), None)
+        if target_bsdf is None:
+            # The material exists but has no Principled BSDF (e.g. just a bare
+            # Material Output) -- without one there's nothing to wire the bake
+            # results into, so create one and hook it up.
+            target_bsdf = mat.node_tree.nodes.new("ShaderNodeBsdfPrincipled")
+            target_bsdf.location = (-50, 300)
+            output_node = next((n for n in mat.node_tree.nodes if n.bl_idname == 'ShaderNodeOutputMaterial'), None)
+            if output_node is None:
+                output_node = mat.node_tree.nodes.new("ShaderNodeOutputMaterial")
+                output_node.location = (250, 300)
+            mat.node_tree.links.new(target_bsdf.outputs["BSDF"], output_node.inputs["Surface"])
 
         prev_engine = context.scene.render.engine
         context.scene.render.engine = 'CYCLES'
@@ -239,18 +250,17 @@ class BBTB_OT_bake(bpy.types.Operator):
                         self.report({'ERROR'}, f"Baking {input_name} failed.")
                         return {'CANCELLED'}
 
-                    if target_bsdf is not None:
-                        if input_name == "Normal":
-                            normal_map_node = find_node(mat, "BB_Texture_Bake_NormalMap")
-                            if normal_map_node is None:
-                                normal_map_node = mat.node_tree.nodes.new("ShaderNodeNormalMap")
-                                normal_map_node.name = "BB_Texture_Bake_NormalMap"
-                                normal_map_node.location = (-250, -300)
-                            normal_map_node.uv_map = uv_name
-                            mat.node_tree.links.new(bake_node.outputs["Color"], normal_map_node.inputs["Color"])
-                            mat.node_tree.links.new(normal_map_node.outputs["Normal"], target_bsdf.inputs["Normal"])
-                        else:
-                            mat.node_tree.links.new(bake_node.outputs["Color"], target_bsdf.inputs[input_name])
+                    if input_name == "Normal":
+                        normal_map_node = find_node(mat, "BB_Texture_Bake_NormalMap")
+                        if normal_map_node is None:
+                            normal_map_node = mat.node_tree.nodes.new("ShaderNodeNormalMap")
+                            normal_map_node.name = "BB_Texture_Bake_NormalMap"
+                            normal_map_node.location = (-250, -300)
+                        normal_map_node.uv_map = uv_name
+                        mat.node_tree.links.new(bake_node.outputs["Color"], normal_map_node.inputs["Color"])
+                        mat.node_tree.links.new(normal_map_node.outputs["Normal"], target_bsdf.inputs["Normal"])
+                    else:
+                        mat.node_tree.links.new(bake_node.outputs["Color"], target_bsdf.inputs[input_name])
 
                     baked_images.append((suffix, image))
         finally:
