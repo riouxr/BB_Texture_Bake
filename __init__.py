@@ -1,18 +1,18 @@
 bl_info = {
-    "name": "BB UV Transfer",
+    "name": "BB Texture Bake",
     "author": "Blender Bob",
-    "version": (2, 2, 0),
+    "version": (3, 0, 0),
     "blender": (4, 5, 0),
     "location": "3D View > Sidebar > Tool",
-    "description": "Bake a high-resolution mesh's texture onto a different-topology low-resolution mesh",
-    "category": "UV",
+    "description": "Bake a high-resolution mesh's Base Color/Roughness/Normal onto a different-topology low-resolution mesh",
+    "category": "Material",
 }
 
 import bpy
 import os
 
 
-class BBUT_Settings(bpy.types.PropertyGroup):
+class BBTB_Settings(bpy.types.PropertyGroup):
     source: bpy.props.PointerProperty(
         name="High Res",
         description="Detailed mesh to bake the texture from",
@@ -71,21 +71,30 @@ class BBUT_Settings(bpy.types.PropertyGroup):
     )
 
 
-def find_image_node(material):
+def find_node(material, name):
     for node in material.node_tree.nodes:
-        if node.bl_idname == 'ShaderNodeTexImage' and node.name == "BB_UV_Transfer_BakeTarget":
+        if node.name == name:
             return node
     return None
 
 
-class BBUT_OT_bake(bpy.types.Operator):
-    bl_idname = "bb_uv_transfer.bake"
+# (suffix, BSDF input to check on the source / wire up on the target, bake type,
+# pass filter, image colorspace)
+BAKE_CHANNELS = (
+    ("D", "Base Color", 'DIFFUSE', {'COLOR'}, 'sRGB'),
+    ("R", "Roughness", 'ROUGHNESS', set(), 'Non-Color'),
+    ("N", "Normal", 'NORMAL', set(), 'Non-Color'),
+)
+
+
+class BBTB_OT_bake(bpy.types.Operator):
+    bl_idname = "bb_texture_bake.bake"
     bl_label = "Bake High Res to Low Res"
     bl_description = "Bake the high-res mesh's texture onto the low-res mesh's UVs"
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
-        s = context.scene.bb_uv_transfer_settings
+        s = context.scene.bb_texture_bake_settings
         source = s.source
         target = s.target
 
@@ -100,6 +109,19 @@ class BBUT_OT_bake(bpy.types.Operator):
             return {'CANCELLED'}
         if not source.active_material or not source.active_material.use_nodes:
             self.report({'ERROR'}, "High Res needs a node-based material with its texture connected.")
+            return {'CANCELLED'}
+
+        source_bsdf = next(
+            (n for n in source.active_material.node_tree.nodes if n.bl_idname == 'ShaderNodeBsdfPrincipled'),
+            None,
+        )
+        if source_bsdf is None:
+            self.report({'ERROR'}, "High Res needs a Principled BSDF in its material.")
+            return {'CANCELLED'}
+
+        channels = [ch for ch in BAKE_CHANNELS if source_bsdf.inputs[ch[1]].is_linked]
+        if not channels:
+            self.report({'ERROR'}, "High Res has no textures connected to Base Color, Roughness, or Normal.")
             return {'CANCELLED'}
 
         uv_name = "UVMap"
@@ -155,7 +177,6 @@ class BBUT_OT_bake(bpy.types.Operator):
         dst_mesh.uv_layers.active = dst_uv
 
         image_name = s.image_name.strip() or "BakedTexture"
-        image = bpy.data.images.new(image_name, width=s.image_size, height=s.image_size, alpha=False)
 
         mat = target.active_material
         if mat is None or mat == source.active_material:
@@ -171,17 +192,7 @@ class BBUT_OT_bake(bpy.types.Operator):
         elif not mat.use_nodes:
             mat.use_nodes = True
 
-        bake_node = find_image_node(mat)
-        if bake_node is None:
-            bake_node = mat.node_tree.nodes.new("ShaderNodeTexImage")
-            bake_node.name = "BB_UV_Transfer_BakeTarget"
-            bake_node.location = (-400, 300)
-        bake_node.image = image
-        mat.node_tree.nodes.active = bake_node
-
-        bsdf = next((n for n in mat.node_tree.nodes if n.bl_idname == 'ShaderNodeBsdfPrincipled'), None)
-        if bsdf is not None:
-            mat.node_tree.links.new(bake_node.outputs["Color"], bsdf.inputs["Base Color"])
+        target_bsdf = next((n for n in mat.node_tree.nodes if n.bl_idname == 'ShaderNodeBsdfPrincipled'), None)
 
         prev_engine = context.scene.render.engine
         context.scene.render.engine = 'CYCLES'
@@ -192,21 +203,56 @@ class BBUT_OT_bake(bpy.types.Operator):
         target.select_set(True)
         context.view_layer.objects.active = target
 
+        baked_images = []
         try:
             with context.temp_override(
                 active_object=target,
                 selected_objects=[source, target],
                 selected_editable_objects=[source, target],
             ):
-                result = bpy.ops.object.bake(
-                    type='DIFFUSE',
-                    pass_filter={'COLOR'},
-                    use_selected_to_active=True,
-                    max_ray_distance=s.max_ray_distance,
-                    cage_extrusion=s.cage_extrusion,
-                    margin=s.margin,
-                    use_clear=True,
-                )
+                for suffix, input_name, bake_type, pass_filter, colorspace in channels:
+                    image = bpy.data.images.new(
+                        f"{image_name}_{suffix}", width=s.image_size, height=s.image_size, alpha=False,
+                    )
+                    image.colorspace_settings.name = colorspace
+
+                    node_name = f"BB_Texture_Bake_{suffix}"
+                    bake_node = find_node(mat, node_name)
+                    if bake_node is None:
+                        bake_node = mat.node_tree.nodes.new("ShaderNodeTexImage")
+                        bake_node.name = node_name
+                    bake_node.image = image
+                    bake_node.location = (-600, 300 - 300 * len(baked_images))
+                    mat.node_tree.nodes.active = bake_node
+
+                    bake_result = bpy.ops.object.bake(
+                        type=bake_type,
+                        pass_filter=pass_filter,
+                        use_selected_to_active=True,
+                        max_ray_distance=s.max_ray_distance,
+                        cage_extrusion=s.cage_extrusion,
+                        margin=s.margin,
+                        use_clear=True,
+                    )
+                    if 'FINISHED' not in bake_result:
+                        bpy.data.images.remove(image)
+                        self.report({'ERROR'}, f"Baking {input_name} failed.")
+                        return {'CANCELLED'}
+
+                    if target_bsdf is not None:
+                        if input_name == "Normal":
+                            normal_map_node = find_node(mat, "BB_Texture_Bake_NormalMap")
+                            if normal_map_node is None:
+                                normal_map_node = mat.node_tree.nodes.new("ShaderNodeNormalMap")
+                                normal_map_node.name = "BB_Texture_Bake_NormalMap"
+                                normal_map_node.location = (-250, -300)
+                            normal_map_node.uv_map = uv_name
+                            mat.node_tree.links.new(bake_node.outputs["Color"], normal_map_node.inputs["Color"])
+                            mat.node_tree.links.new(normal_map_node.outputs["Normal"], target_bsdf.inputs["Normal"])
+                        else:
+                            mat.node_tree.links.new(bake_node.outputs["Color"], target_bsdf.inputs[input_name])
+
+                    baked_images.append((suffix, image))
         finally:
             context.scene.render.engine = prev_engine
             for ob in context.view_layer.objects:
@@ -215,43 +261,44 @@ class BBUT_OT_bake(bpy.types.Operator):
             if prev_mode != 'OBJECT':
                 bpy.ops.object.mode_set(mode=prev_mode)
 
-        if 'FINISHED' not in result:
-            bpy.data.images.remove(image)
-            self.report({'ERROR'}, "Bake failed.")
-            return {'CANCELLED'}
+        blend_saved = bool(bpy.data.filepath)
+        if s.save_next_to_blend and not blend_saved:
+            self.report({'WARNING'}, "Blend file isn't saved yet; packing the images instead.")
 
-        if s.save_next_to_blend:
-            if bpy.data.filepath:
-                save_path = os.path.join(os.path.dirname(bpy.data.filepath), image_name + ".png")
+        custom_base = s.save_path.strip()
+        if custom_base.lower().endswith(".png"):
+            custom_base = custom_base[:-4]
+
+        for suffix, image in baked_images:
+            if s.save_next_to_blend and blend_saved:
+                save_path = os.path.join(os.path.dirname(bpy.data.filepath), f"{image_name}_{suffix}.png")
+            elif not s.save_next_to_blend and custom_base:
+                save_path = f"{custom_base}_{suffix}.png"
             else:
                 save_path = ""
-                self.report({'WARNING'}, "Blend file isn't saved yet; packing the image instead.")
-        else:
-            save_path = s.save_path.strip()
 
-        if save_path:
-            if not save_path.lower().endswith(".png"):
-                save_path += ".png"
-            image.filepath_raw = bpy.path.abspath(save_path)
-            image.file_format = 'PNG'
-            image.save()
-        else:
-            image.pack()
+            if save_path:
+                image.filepath_raw = bpy.path.abspath(save_path)
+                image.file_format = 'PNG'
+                image.save()
+            else:
+                image.pack()
 
-        self.report({'INFO'}, f"Baked '{image_name}' ({s.image_size}x{s.image_size}) onto {target.name}.")
+        baked_names = ", ".join(f"{image_name}_{suffix}" for suffix, _ in baked_images)
+        self.report({'INFO'}, f"Baked {baked_names} ({s.image_size}x{s.image_size}) onto {target.name}.")
         return {'FINISHED'}
 
 
-class BBUT_PT_panel(bpy.types.Panel):
-    bl_label = "BB UV Transfer"
-    bl_idname = "BBUT_PT_panel"
+class BBTB_PT_panel(bpy.types.Panel):
+    bl_label = "BB Texture Bake"
+    bl_idname = "BBTB_PT_panel"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_category = "Tool"
 
     def draw(self, context):
         layout = self.layout
-        s = context.scene.bb_uv_transfer_settings
+        s = context.scene.bb_texture_bake_settings
 
         box = layout.box()
         box.label(text="Source Texture")
@@ -274,20 +321,20 @@ class BBUT_PT_panel(bpy.types.Panel):
 
         row = layout.row()
         row.scale_y = 1.5
-        row.operator("bb_uv_transfer.bake", icon='RENDER_STILL')
+        row.operator("bb_texture_bake.bake", icon='RENDER_STILL')
 
 
-classes = (BBUT_Settings, BBUT_OT_bake, BBUT_PT_panel)
+classes = (BBTB_Settings, BBTB_OT_bake, BBTB_PT_panel)
 
 
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.bb_uv_transfer_settings = bpy.props.PointerProperty(type=BBUT_Settings)
+    bpy.types.Scene.bb_texture_bake_settings = bpy.props.PointerProperty(type=BBTB_Settings)
 
 
 def unregister():
-    del bpy.types.Scene.bb_uv_transfer_settings
+    del bpy.types.Scene.bb_texture_bake_settings
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 
