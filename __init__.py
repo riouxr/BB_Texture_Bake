@@ -1,7 +1,7 @@
 bl_info = {
     "name": "BB Texture Bake",
     "author": "Blender Bob",
-    "version": (3, 1, 0),
+    "version": (3, 1, 1),
     "blender": (4, 5, 0),
     "location": "3D View > Sidebar > Tool",
     "description": "Bake a high-resolution mesh's Base Color/Roughness/Normal onto a different-topology low-resolution mesh",
@@ -240,6 +240,12 @@ class BBTB_OT_bake(bpy.types.Operator):
                         bake_node.name = node_name
                     bake_node.image = image
                     bake_node.location = (-600, 300 - 300 * len(baked_images))
+                    # Cycles requires the bake target node to be both the active
+                    # node AND selected -- nodes.active alone isn't enough once
+                    # the material has more than a couple of nodes.
+                    for n in mat.node_tree.nodes:
+                        n.select = False
+                    bake_node.select = True
                     mat.node_tree.nodes.active = bake_node
 
                     bake_result = bpy.ops.object.bake(
